@@ -4,3 +4,5 @@ scikit-learn>=0.23.2
 torch>=1.6.0
 tqdm>=4.55.0
 scanpy>=1.6.0
+donfig
+numcodecs

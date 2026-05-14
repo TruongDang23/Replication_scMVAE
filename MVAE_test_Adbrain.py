@@ -17,179 +17,227 @@ from sklearn.cluster import KMeans
 from sklearn import metrics
 from sklearn.metrics import cohen_kappa_score
 from tqdm import trange
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from scMVAE.utilities import read_dataset, normalize, calculate_log_library_size, parameter_setting, save_checkpoint, load_checkpoint, adjust_learning_rate
 from scMVAE.MVAE_model import scMVAE_Concat, scMVAE_NN, scMVAE_POE
 
 
 def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var, lib_mean1, lib_var1, real_groups, 
-	      final_rate, file_fla, Type1, Type, device, scale_factor ):
+          final_rate, file_fla, Type1, Type, device, scale_factor):
 
-	train         = data_utils.TensorDataset( torch.from_numpy( adata.raw[train_index].X ),
-											  torch.from_numpy( lib_mean[train_index] ), 
-											  torch.from_numpy( lib_var[train_index] ),
-											  torch.from_numpy( lib_mean1[train_index] ), 
-											  torch.from_numpy( lib_var1[train_index] ),
-											  torch.from_numpy( adata1.raw[train_index].X ))
-	train_loader  = data_utils.DataLoader( train, batch_size = args.batch_size, shuffle = True )
+    train = data_utils.TensorDataset(
+        torch.from_numpy(adata.raw[train_index].X.toarray()),
+        torch.from_numpy(lib_mean[train_index]),
+        torch.from_numpy(lib_var[train_index]),
+        torch.from_numpy(lib_mean1[train_index]),
+        torch.from_numpy(lib_var1[train_index]),
+        torch.from_numpy(adata1.raw[train_index].X.toarray()))
+    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True)
 
-	test          = data_utils.TensorDataset( torch.from_numpy( adata.raw[test_index].X ),
-											  torch.from_numpy( lib_mean[test_index] ), 
-											  torch.from_numpy( lib_var[test_index] ),
-											  torch.from_numpy( lib_mean1[test_index] ), 
-											  torch.from_numpy( lib_var1[test_index] ),
-											  torch.from_numpy( adata1.raw[test_index].X ))
-	test_loader   = data_utils.DataLoader( test, batch_size = len(test_index), shuffle = False )
+    test = data_utils.TensorDataset(
+        torch.from_numpy(adata.raw[test_index].X.toarray()),
+        torch.from_numpy(lib_mean[test_index]),
+        torch.from_numpy(lib_var[test_index]),
+        torch.from_numpy(lib_mean1[test_index]),
+        torch.from_numpy(lib_var1[test_index]),
+        torch.from_numpy(adata1.raw[test_index].X.toarray()))
+    test_loader = data_utils.DataLoader(test, batch_size=len(test_index), shuffle=False)
 
-	
-	total         = data_utils.TensorDataset( torch.from_numpy( adata.raw.X  ),
-											  torch.from_numpy( adata1.raw.X ))
-	total_loader  = data_utils.DataLoader( total, batch_size = args.batch_size , shuffle = False )
-	
-	args.max_epoch   = 500
-	train_loss_list  = []
+    total = data_utils.TensorDataset(
+        torch.from_numpy(adata.raw.X.toarray()),
+        torch.from_numpy(adata1.raw.X.toarray()))
+    total_loader = data_utils.DataLoader(total, batch_size=args.batch_size, shuffle=False)
 
-	flag_break       = 0
-	epoch_count      = 0
-	reco_epoch_test  = 0
-	test_like_max    = 100000
-	status = ""
+    args.max_epoch  = 500
+    train_loss_list = []
 
-	max_iteration = 10000
-	args.epoch_per_test = 10
+    # ── Log history để tính trung bình cuối training ──────────────────────────
+    ari_history  = []
+    nmi_history  = []
+    loss_history = []
 
-	params    = filter(lambda p: p.requires_grad, model.parameters())
-	optimizer = optim.Adam( params, lr = args.lr, weight_decay = args.weight_decay, eps = args.eps )
+    flag_break      = 0
+    epoch_count     = 0
+    reco_epoch_test = 0
+    test_like_max   = 100000
+    status          = ""
 
-	epoch     = 0
-	iteration = 0
-	start     = time.time()
+    args.epoch_per_test = 10
 
-	model.init_gmm_params( total_loader )
+    params    = filter(lambda p: p.requires_grad, model.parameters())
+    optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay, eps=args.eps)
 
-	with trange( args.max_epoch, disable=True ) as pbar:
+    epoch     = 0
+    iteration = 0
+    start     = time.time()
 
-		while True:
+    model.init_gmm_params(total_loader)
 
-			model.train()
+    # ── Header log ─────────────────────────────────────────────────────────────
+    print(f"\n{'Epoch':>6} | {'Train Loss':>12} | {'Test Loss':>12} | {'ARI':>8} | {'NMI':>8} | {'Status'}")
+    print("-" * 75)
 
-			epoch +=  1
-			epoch_lr = adjust_learning_rate( args.lr, optimizer, epoch, final_rate, 10 )
-			kl_weight = min( 1, epoch / args.anneal_epoch )
+    while True:
 
-			for batch_idx, ( X1, lib_m, lib_v, lib_m1, lib_v1, X2 ) in enumerate(train_loader):
+        model.train()
+        epoch += 1
+        epoch_lr  = adjust_learning_rate(args.lr, optimizer, epoch, final_rate, 10)
+        kl_weight = min(1, epoch / args.anneal_epoch)
 
-				X1, X2         = X1.float().to(device), X2.float().to(device)
-				lib_m,lib_v    = lib_m.to(device),      lib_v.to(device)
-				lib_m1, lib_v1 = lib_m1.to(device),     lib_v1.to(device)
+        # ── Train loop ─────────────────────────────────────────────────────────
+        train_loss_accum = 0.0
+        for batch_idx, (X1, lib_m, lib_v, lib_m1, lib_v1, X2) in enumerate(train_loader):
 
-				X1, X2         = Variable( X1 ),    Variable( X2 )
-				lib_m, lib_v   = Variable( lib_m ), Variable( lib_v )
-				lib_m1, lib_v1 = Variable( lib_m1 ),Variable( lib_v1 )
+            X1, X2         = X1.float().to(device),  X2.float().to(device)
+            lib_m, lib_v   = lib_m.to(device),        lib_v.to(device)
+            lib_m1, lib_v1 = lib_m1.to(device),       lib_v1.to(device)
 
-				optimizer.zero_grad()
+            X1, X2         = Variable(X1),    Variable(X2)
+            lib_m, lib_v   = Variable(lib_m), Variable(lib_v)
+            lib_m1, lib_v1 = Variable(lib_m1),Variable(lib_v1)
 
-				loss1, loss2, kl_divergence_l, kl_divergence_l1, kl_divergence_z = model( X1.float(), X2.float(), lib_m, lib_v, lib_m1, lib_v1 )
-				loss = torch.mean( ( scale_factor * loss1 + loss2 + kl_divergence_l + kl_divergence_l1) + (kl_weight*(kl_divergence_z)) )  
+            optimizer.zero_grad()
 
-				loss.backward()
-				optimizer.step()
+            loss1, loss2, kl_divergence_l, kl_divergence_l1, kl_divergence_z = model(
+                X1.float(), X2.float(), lib_m, lib_v, lib_m1, lib_v1)
+            loss = torch.mean(
+                (scale_factor * loss1 + loss2 + kl_divergence_l + kl_divergence_l1)
+                + (kl_weight * kl_divergence_z))
 
-				iteration += 1 
+            loss.backward()
+            optimizer.step()
 
-			epoch_count += 1
+            train_loss_accum += loss.item()
+            iteration += 1
 
-			if epoch % args.epoch_per_test == 0 and epoch > 0: 
+        avg_train_loss = train_loss_accum / len(train_loader)
+        epoch_count   += 1
 
-				model.eval()
+        # ── Eval mỗi epoch_per_test epoch ──────────────────────────────────────
+        if epoch % args.epoch_per_test == 0 and epoch > 0:
 
-				with torch.no_grad():
+            model.eval()
+            with torch.no_grad():
 
-					for batch_idx, ( X1, lib_m, lib_v, lib_m1, lib_v1, X2 ) in enumerate(test_loader): 
+                # --- Test loss ---
+                for batch_idx, (X1, lib_m, lib_v, lib_m1, lib_v1, X2) in enumerate(test_loader):
 
-						X1, X2         = X1.float().to(device), X2.float().to(device)
-						lib_v, lib_m   = lib_v.to(device),      lib_m.to(device)
-						lib_v1, lib_m1 = lib_v1.to(device),     lib_m1.to(device)
+                    X1, X2         = X1.float().to(device),  X2.float().to(device)
+                    lib_v, lib_m   = lib_v.to(device),        lib_m.to(device)
+                    lib_v1, lib_m1 = lib_v1.to(device),       lib_m1.to(device)
 
-						X1, X2         = Variable( X1 ),     Variable( X2 )
-						lib_m, lib_v   = Variable( lib_m ),  Variable( lib_v )
-						lib_m1, lib_v1 = Variable( lib_m1 ), Variable( lib_v1 )
-				
+                    X1, X2         = Variable(X1),     Variable(X2)
+                    lib_m, lib_v   = Variable(lib_m),  Variable(lib_v)
+                    lib_m1, lib_v1 = Variable(lib_m1), Variable(lib_v1)
 
-						loss1, loss2, kl_divergence_l, kl_divergence_l1, kl_divergence_z = model( X1.float(), X2.float(), lib_m, lib_v, lib_m1, lib_v1 )
-						test_loss = torch.mean( ( scale_factor * loss1 + loss2 + kl_divergence_l + kl_divergence_l1) + (kl_weight*(kl_divergence_z)) )  
+                    loss1, loss2, kl_divergence_l, kl_divergence_l1, kl_divergence_z = model(
+                        X1.float(), X2.float(), lib_m, lib_v, lib_m1, lib_v1)
+                    test_loss = torch.mean(
+                        (scale_factor * loss1 + loss2 + kl_divergence_l + kl_divergence_l1)
+                        + (kl_weight * kl_divergence_z))
 
-						train_loss_list.append( test_loss.item() )
+                train_loss_list.append(test_loss.item())
 
-						if math.isnan(test_loss.item()):
-							flag_break = 1
-							break
+                if math.isnan(test_loss.item()):
+                    flag_break = 1
+                    break
 
-						if test_like_max >  test_loss.item():
-							test_like_max   = test_loss.item()
-							epoch_count  = 0
+                # --- ARI / NMI: lấy latent z rồi dùng nhãn GMM của model ---
+                latent_z, _, _, _, _ = model.Denoise_batch(total_loader)
 
-							save_checkpoint(model)
+                if latent_z is not None:
+                    # Dự đoán cụm từ latent z (dùng KMeans với n_clusters = số class)
+                    n_clusters  = len(set(real_groups))
+                    km          = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                    pred_labels = km.fit_predict(latent_z)
 
-							print( str(epoch)+ "   " + str(loss.item()) +"   " + str(test_loss.item()) +"   " + 
-								   str(torch.mean(loss1).item()) +"   "+ str(torch.mean(loss2).item()) +
-								   "  kl_divergence_l:  " + str(torch.mean(kl_divergence_l).item()) + " kl_weight: " + str( kl_weight )+
-								   " kl_divergence_z: " + str( torch.mean(kl_divergence_z).item() ) )
+                    ari = adjusted_rand_score(real_groups, pred_labels)
+                    nmi = normalized_mutual_info_score(real_groups, pred_labels, average_method='arithmetic')
+                else:
+                    ari, nmi = 0.0, 0.0
 
-			if epoch_count >= 30:
-				reco_epoch_test = epoch
-				status = " larger than 30 "
-				break
+                ari_history.append(ari)
+                nmi_history.append(nmi)
+                loss_history.append(test_loss.item())
 
-			if flag_break == 1:
-				reco_epoch_test = epoch
-				status = " with NA "
-				break
+                # --- Lưu model tốt nhất ---
+                is_best = test_like_max > test_loss.item()
+                if is_best:
+                    test_like_max = test_loss.item()
+                    epoch_count   = 0
+                    save_checkpoint(model)
 
-			if epoch >= args.max_epoch:
-				reco_epoch_test = epoch
-				status = " larger than 500 epoch "
-				break
-			
-			if len(train_loss_list) >= 2 :
-				if abs(train_loss_list[-1] - train_loss_list[-2]) / train_loss_list[-2] < 1e-4 :
-					reco_epoch_test = epoch
-					status = " training for the train dataset is converged! "
-					break
+                # --- Print log mỗi eval epoch ---
+                best_tag = " ✓ best" if is_best else ""
+                print(f"{epoch:>6} | {avg_train_loss:>12.4f} | {test_loss.item():>12.4f} | "
+                      f"{ari:>8.4f} | {nmi:>8.4f} |{best_tag}")
 
-	duration = time.time() - start
-	print('Finish training, total time: ' + str(duration) + 's' + " epoch: " + str(reco_epoch_test) + " status: " + status )
+        # ── Điều kiện dừng (giữ nguyên logic gốc) ─────────────────────────────
+        if epoch_count >= 30:
+            reco_epoch_test = epoch
+            status = "epoch_count > 30 (no improvement)"
+            break
 
-	load_checkpoint( './saved_model/model_best.pth.tar', model, device)
+        if flag_break == 1:
+            reco_epoch_test = epoch
+            status = "NaN loss"
+            break
 
-	latent_z, recon_x1, norm_x1, recon_x_2, norm_x2 = model.Denoise_batch(total_loader)
+        if epoch >= args.max_epoch:
+            reco_epoch_test = epoch
+            status = "reached max_epoch (500)"
+            break
 
-	if latent_z is not None:
-		imputed_val  = pd.DataFrame( latent_z, index= adata.obs_names ).to_csv( os.path.join( args.outdir, 
-									 str(file_fla) + '_latent_ZINB_final.csv' ) ) 
-	if norm_x1 is not None:
-		norm_x1_1    = pd.DataFrame( norm_x1, columns =  adata.var_names, 
-									 index= adata.obs_names ).to_csv( os.path.join( args.outdir,
-									 str(file_fla) + '_scRNA_norm_ZINB_final.csv' ) )
-	if norm_x2 is not None:
-		norm_x2_1   = pd.DataFrame( norm_x2, columns =  adata1.var_names, 
-									index= adata1.obs_names ).to_csv( os.path.join( args.outdir, 
-									str(file_fla)+ '_scATAC_norm_ZINB_final.csv') )
+        if len(train_loss_list) >= 2:
+            if abs(train_loss_list[-1] - train_loss_list[-2]) / train_loss_list[-2] < 1e-4:
+                reco_epoch_test = epoch
+                status = "converged (loss delta < 1e-4)"
+                break
 
+    # ── Tổng kết cuối training ─────────────────────────────────────────────────
+    duration = time.time() - start
+    print("\n" + "=" * 75)
+    print(f"  Finish training — Total time : {duration:.1f}s")
+    print(f"  Stop epoch      : {reco_epoch_test}  |  Status: {status}")
+    if ari_history:
+        print(f"  ARI  — last: {ari_history[-1]:.4f}  |  mean: {sum(ari_history)/len(ari_history):.4f}  |  best: {max(ari_history):.4f}")
+        print(f"  NMI  — last: {nmi_history[-1]:.4f}  |  mean: {sum(nmi_history)/len(nmi_history):.4f}  |  best: {max(nmi_history):.4f}")
+        print(f"  Loss — last: {loss_history[-1]:.4f}  |  best: {min(loss_history):.4f}")
+    print("=" * 75 + "\n")
+
+    # ── Load lại model tốt nhất và xuất kết quả (giữ nguyên gốc) ──────────────
+    load_checkpoint('./saved_model/model_best.pth.tar', model, device)
+
+    latent_z, recon_x1, norm_x1, recon_x_2, norm_x2 = model.Denoise_batch(total_loader)
+
+    if latent_z is not None:
+        pd.DataFrame(latent_z, index=adata.obs_names).to_csv(
+            os.path.join(args.outdir, str(file_fla) + '_latent_ZINB_final.csv'))
+    if norm_x1 is not None:
+        pd.DataFrame(norm_x1, columns=adata.var_names, index=adata.obs_names).to_csv(
+            os.path.join(args.outdir, str(file_fla) + '_scRNA_norm_ZINB_final.csv'))
+    if norm_x2 is not None:
+        pd.DataFrame(norm_x2, columns=adata1.var_names, index=adata1.obs_names).to_csv(
+            os.path.join(args.outdir, str(file_fla) + '_scATAC_norm_ZINB_final.csv'))
+        
 def train_with_argas( args ):
 
-	args.workdir  =  '/sibcb1/chenluonanlab6/zuochunman/workPath/Multimodal/MVAE/Datasets/Real/SNARE-seq/AdBrainCortex/lap_combine/POE_3000/'
-	args.outdir   =  '/sibcb1/chenluonanlab6/zuochunman/workPath/Multimodal/MVAE/Datasets/Real/SNARE-seq/AdBrainCortex/lap_combine/POE_3000/MVAE/'
-	args.File1    =  'Gene_order_99_3000.tsv'
-	args.File2    =  'Gene_order_95_3000_atac.tsv'
-	args.File2_1  =  'Gene_order_95_3000_atac_binary.tsv'
+	args.workdir  =  '/content/Replication_scMVAE/scMVAE/dataset/'
+	args.outdir   =  '/content/Replication_scMVAE/scMVAE/output/'
 
-	adata, adata1, adata2, train_index, test_index,_ = read_dataset( File1 = os.path.join( args.workdir, args.File1 ),
-																     File2 = os.path.join( args.workdir, args.File2 ),  
-																     File3 = None,
-																     File4 = os.path.join( args.workdir, args.File2_1 ),
-																     test_size_prop = 0.1
-																    )
+	# adata, adata1, adata2, train_index, test_index,_ = read_dataset( File1 = os.path.join( args.workdir, args.File1 ),
+	# 															     File2 = os.path.join( args.workdir, args.File2 ),  
+	# 															     File3 = None,
+	# 															     File4 = os.path.join( args.workdir, args.File2_1 ),
+	# 															     test_size_prop = 0.1
+	# 															    )
+	
+	adata, adata1, adata2, train_index, test_index, _ = read_dataset(
+		File_RNA  = os.path.join(args.workdir, 'PBMC/RNA.h5ad'),
+		File_ATAC = os.path.join(args.workdir, 'PBMC/ATAC.h5ad'),
+		test_size_prop = 0.1
+	)
 
 	adata  = normalize( adata,  size_factors = False, 
 						normalize_input = False,  logtrans_input = True ) 

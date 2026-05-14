@@ -84,88 +84,57 @@ def split_train_test_datasets( Data1, trainRate ):
 
 	return trainData, testData, sel_pos, remain_pos
 
-def read_dataset( File1 = None, File3 = None, File2 = None, File4 = None, transpose = True, test_size_prop = 0.15 ):
-	
-	### File1 for raw reads count 
-	adata = sc.read( File1 )
-	
-	if File2 is not None:
-		adata1 = sc.read( File2 )
-		if transpose: 
-			adata1 = adata1.transpose()
-	else:
-		adata1 = None
+def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15):
+    """
+    Đọc dữ liệu multimodal từ file .h5ad (đã preprocessing, dạng cells x features).
+    
+    Parameters
+    ----------
+    File_RNA  : str - đường dẫn tới file RNA.h5ad
+    File_ATAC : str - đường dẫn tới file ATAC.h5ad
+    test_size_prop : float - tỉ lệ tập test (mặc định 0.15)
 
-	if File4 is not None:
-		adata2 = sc.read( File4 )
-		if transpose: 
-			adata2 = adata2.transpose()
-	else:
-		adata2 = None
-	
-	if transpose: 
-		adata  = adata.transpose()
-	
-	### File2 for cell group information
-	label_ground_truth = []
-	
-	if File3 is not None:
-		
-		Data2 = pd.read_csv( File3, header=0, index_col=0 )
+    Returns
+    -------
+    adata, adata1, adata2, train_idx, test_idx, label_ground_truth
+    (adata2 = None vì chỉ có 2 modality)
+    """
 
-		## preprocessing for latter evaluation
-		group = Data2['Group'].values
-		for g in group:
-			g = int(g.split('Group')[1])
-			label_ground_truth.append(g)
-	else:
-		label_ground_truth =  np.ones( len( adata.obs_names ) )
-	
-	if test_size_prop > 0 :
-		train_idx, test_idx = train_test_split(np.arange(adata.n_obs), 
-											   test_size = test_size_prop, 
-											   random_state = 200)
-		spl = pd.Series(['train'] * adata.n_obs)
-		spl.iloc[test_idx]  = 'test'
-		adata.obs['split']  = spl.values
-		
-		if File2 is not None:
-			adata1.obs['split'] = spl.values
+    # ── 1. Đọc file .h5ad (đã là cells × features, không cần transpose) ──────
+    adata  = sc.read(File_RNA)   # RNA
+    adata1 = sc.read(File_ATAC)  # ATAC
 
-		if File4 is not None:
-			adata2.obs['split'] = spl.values
+    # ── 2. Lấy ground truth từ cột cell_type ─────────────────────────────────
+    if 'cell_type' in adata.obs.columns:
+        label_ground_truth = adata.obs['cell_type'].values.tolist()
+    else:
+        print("[Warning] Không tìm thấy cột 'cell_type' trong adata.obs → gán nhãn 1 cho tất cả.")
+        label_ground_truth = np.ones(adata.n_obs)
 
-	else:
-		train_idx, test_idx = list(range( adata.n_obs )), list(range( adata.n_obs ))
+    # ── 3. Train / Test split ─────────────────────────────────────────────────
+    if test_size_prop > 0:
+        train_idx, test_idx = train_test_split(
+            np.arange(adata.n_obs),
+            test_size=test_size_prop,
+            random_state=200
+        )
+        spl = pd.Series(['train'] * adata.n_obs)
+        spl.iloc[test_idx] = 'test'
+    else:
+        train_idx = list(range(adata.n_obs))
+        test_idx  = list(range(adata.n_obs))
+        spl = pd.Series(['train'] * adata.n_obs)
 
-		spl = pd.Series(['train'] * adata.n_obs)
-		adata.obs['split']       = spl.values
-		
-		if File2 is not None:
-			adata1.obs['split']  = spl.values
+    # ── 4. Gán metadata split + Group vào obs ─────────────────────────────────
+    for ad in [adata, adata1]:
+        ad.obs['split'] = spl.values
+        ad.obs['split'] = ad.obs['split'].astype('category')
+        ad.obs['Group'] = label_ground_truth   # giữ tên 'Group' để tương thích với pipeline gốc
+        ad.obs['Group'] = ad.obs['Group'].astype('category')
 
-		if File4 is not None:
-			adata2.obs['split']  = spl.values
-		
-		
-	adata.obs['split'] = adata.obs['split'].astype('category')
-	adata.obs['Group'] = label_ground_truth
-	adata.obs['Group'] = adata.obs['Group'].astype('category')
-	
-	if File2 is not None:
-		adata1.obs['split'] = adata1.obs['split'].astype('category')
-		adata1.obs['Group'] = label_ground_truth
-		adata1.obs['Group'] = adata1.obs['Group'].astype('category')
+    print('Successfully preprocessed {} genes and {} cells.'.format(adata.n_vars, adata.n_obs))
 
-	if File4 is not None:
-		adata2.obs['split'] = adata2.obs['split'].astype('category')
-		adata2.obs['Group'] = label_ground_truth
-		adata2.obs['Group'] = adata2.obs['Group'].astype('category')
-	
-	print('Successfully preprocessed {} genes and {} cells.'.format(adata.n_vars, adata.n_obs))
-	
-	### here, adata with cells * features
-	return adata, adata1, adata2, train_idx, test_idx, label_ground_truth
+    return adata, adata1, None, train_idx, test_idx, label_ground_truth
 
 def normalize( adata, filter_min_counts = True, size_factors = False, 
 			   normalize_input = False, logtrans_input = True):
