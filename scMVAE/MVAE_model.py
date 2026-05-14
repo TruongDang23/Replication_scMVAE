@@ -663,19 +663,21 @@ class scMVAE_POE(nn.Module):
 		dropout_rate_2 =  result["dropout_rate_2"]
 
 		if X1 is not None:
-			mean_l           =  result["mean_l"]
-			logvar_l         =  result["logvar_l"]
+			mean_l   = result["mean_l"]
+			logvar_l = result["logvar_l"]
 
-			kl_divergence_l  = kl( Normal(mean_l, logvar_l),
-								   Normal(local_l_mean,torch.sqrt(local_l_var))).sum(dim=1)
+			kl_divergence_l = kl(
+				Normal(mean_l, torch.exp(0.5 * logvar_l)),   # std = exp(0.5 * logvar)
+				Normal(local_l_mean, torch.sqrt(local_l_var)) # std = sqrt(var)
+			).sum(dim=1)
 		else:
-			kl_divergence_l  = torch.tensor(0.0)
+			kl_divergence_l = torch.tensor(0.0)
 
 		if X2 is not None:
 			if self.Type == 'ZINB':
 				mean_l2           =  result["mean_l2"]
 				logvar_l2         =  result["library2"]
-				kl_divergence_l2  = kl( Normal(mean_l2, logvar_l2),
+				kl_divergence_l2  = kl( Normal(mean_l2, torch.exp(0.5 * logvar_l2)),
 										Normal(local_l_mean1,torch.sqrt(local_l_var1))).sum(dim=1)
 			else:
 				kl_divergence_l2 = torch.tensor(0.0)
