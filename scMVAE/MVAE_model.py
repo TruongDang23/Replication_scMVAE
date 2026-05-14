@@ -14,9 +14,9 @@ from torch.autograd import Variable
 from torch.distributions import Normal, kl_divergence as kl
 from sklearn.mixture import GaussianMixture
 import scipy.stats as stats
-from layers import build_multi_layers
-from layers import Encoder, Decoder_ZINB, Decoder
-from loss_function import log_zinb_positive, binary_cross_entropy, mse_loss, poisson_loss, GMM_loss
+from scMVAE.layers import build_multi_layers
+from scMVAE.layers import Encoder, Decoder_ZINB, Decoder
+from scMVAE.loss_function import log_zinb_positive, binary_cross_entropy, mse_loss, poisson_loss, GMM_loss
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)

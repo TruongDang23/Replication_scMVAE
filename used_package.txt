@@ -6,3 +6,4 @@ tqdm>=4.55.0
 scanpy>=1.6.0
 donfig
 numcodecs
+scikit-misc

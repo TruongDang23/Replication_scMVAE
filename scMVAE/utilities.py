@@ -118,8 +118,8 @@ def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15,
     adata = adata[:, adata.var["highly_variable"].values].copy()
 
     # Normalize sau khi giảm chiều
-    sc.pp.normalize_total(adata, target_sum=1e4)
-    sc.pp.log1p(adata)
+    # sc.pp.normalize_total(adata, target_sum=1e4)
+    # sc.pp.log1p(adata)
     print(f"[RNA] Sau HVG + normalize: {adata.shape}")
 
     # Feature selection ATAC: top peaks by total count ──────────────────

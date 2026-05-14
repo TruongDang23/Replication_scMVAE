@@ -243,7 +243,7 @@ def train_with_argas( args ):
 						normalize_input = False,  logtrans_input = True ) 
 
 	adata1 = normalize( adata1, size_factors = False, 
-						normalize_input = False, logtrans_input = False )
+						normalize_input = False, logtrans_input = True )
 
 	print("RNA min ", adata.X.min())
 	print("RNA max ", adata.X.max())
