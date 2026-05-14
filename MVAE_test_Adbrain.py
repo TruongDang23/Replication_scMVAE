@@ -26,6 +26,7 @@ from scMVAE.MVAE_model import scMVAE_Concat, scMVAE_NN, scMVAE_POE
 def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var, lib_mean1, lib_var1, real_groups, 
           final_rate, file_fla, Type1, Type, device, scale_factor):
 
+
     train = data_utils.TensorDataset(
         torch.from_numpy(adata.raw[train_index].X.toarray()),
         torch.from_numpy(lib_mean[train_index]),
@@ -244,7 +245,29 @@ def train_with_argas( args ):
 
 	adata1 = normalize( adata1, size_factors = False, 
 						normalize_input = False, logtrans_input = True )
+     
+	common = adata.obs_names.intersection(adata1.obs_names)
+	if len(common) < max(adata.n_obs, adata1.n_obs):
+		print(f"[Warning] Sau normalize: RNA={adata.n_obs} | ATAC={adata1.n_obs} → còn {len(common)} cells")
 
+		# O(1) lookup
+		rna_name_to_idx = {name: i for i, name in enumerate(adata.obs_names)}
+
+		rna_idx     = np.array([rna_name_to_idx[c] for c in common])
+		rna_idx_set = set(rna_idx.tolist())
+		old_to_new  = {old: new for new, old in enumerate(rna_idx)}
+
+		adata  = adata[common].copy()
+		adata1 = adata1[common].copy()
+
+		# Remap train/test index
+		train_index = np.array([old_to_new[i] for i in train_index if i in rna_idx_set])
+		test_index  = np.array([old_to_new[i] for i in test_index  if i in rna_idx_set])
+
+	print(f"Train: {len(train_index)} | Test: {len(test_index)} | Total: {adata.n_obs}")
+	print(f"adata.raw shape : {adata.raw.X.shape}")
+	print(f"adata1.raw shape: {adata1.raw.X.shape}")
+          
 	print("RNA min ", adata.X.min())
 	print("RNA max ", adata.X.max())
 	print("RNA raw min ", adata.raw.X.min())
@@ -255,6 +278,10 @@ def train_with_argas( args ):
 	print("ATAC raw min ", adata1.raw.X.min())
 	print("ATAC raw max ", adata1.raw.X.max())
 
+	print(adata.shape)
+
+	print(adata.X.shape)
+     
 	args.batch_size     = 64
 	args.epoch_per_test = 10
 	
