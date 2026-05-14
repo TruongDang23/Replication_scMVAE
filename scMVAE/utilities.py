@@ -84,7 +84,8 @@ def split_train_test_datasets( Data1, trainRate ):
 
 	return trainData, testData, sel_pos, remain_pos
 
-def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15):
+def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15,
+                 top_n_rna=500, top_n_atac=500):
     """
     Đọc dữ liệu multimodal từ file .h5ad (đã preprocessing, dạng cells x features).
     
@@ -103,6 +104,32 @@ def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15):
     # ── 1. Đọc file .h5ad (đã là cells × features, không cần transpose) ──────
     adata  = sc.read(File_RNA)   # RNA
     adata1 = sc.read(File_ATAC)  # ATAC
+    print(f"Đọc xong — RNA: {adata.shape} | ATAC: {adata1.shape}")
+
+    # Feature selection RNA: HVG (seurat_v3) ────────────────────────────
+    print(f"\n[RNA] Chọn top {top_n_rna} HVGs (seurat_v3) — shape ban đầu: {adata.shape}")
+
+    sc.pp.highly_variable_genes(
+        adata,
+        n_top_genes=top_n_rna,
+        flavor="seurat_v3",
+        subset=False
+    )
+    adata = adata[:, adata.var["highly_variable"].values].copy()
+
+    # Normalize sau khi giảm chiều
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
+    print(f"[RNA] Sau HVG + normalize: {adata.shape}")
+
+    # Feature selection ATAC: top peaks by total count ──────────────────
+    print(f"\n[ATAC] Chọn top {top_n_atac} peaks by total count — shape ban đầu: {adata1.shape}")
+
+    counts      = np.asarray(adata1.X.sum(axis=0)).ravel()
+    top_indices = np.argpartition(counts, -top_n_atac)[-top_n_atac:]
+    top_indices = np.sort(top_indices)               # giữ thứ tự gốc
+    adata1      = adata1[:, top_indices].copy()
+    print(f"[ATAC] Sau lọc peaks: {adata1.shape}")
 
     # ── 2. Lấy ground truth từ cột cell_type ─────────────────────────────────
     if 'cell_type' in adata.obs.columns:
@@ -131,7 +158,7 @@ def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15):
         ad.obs['split'] = ad.obs['split'].astype('category')
         ad.obs['Group'] = label_ground_truth   # giữ tên 'Group' để tương thích với pipeline gốc
         ad.obs['Group'] = ad.obs['Group'].astype('category')
-
+	
     print('Successfully preprocessed {} genes and {} cells.'.format(adata.n_vars, adata.n_obs))
 
     return adata, adata1, None, train_idx, test_idx, label_ground_truth

@@ -243,7 +243,17 @@ def train_with_argas( args ):
 						normalize_input = False,  logtrans_input = True ) 
 
 	adata1 = normalize( adata1, size_factors = False, 
-						normalize_input = False, logtrans_input = True )
+						normalize_input = False, logtrans_input = False )
+
+	print("RNA min ", adata.X.min())
+	print("RNA max ", adata.X.max())
+	print("RNA raw min ", adata.raw.X.min())
+	print("RNA raw max ", adata.raw.X.max())
+    
+	print("ATAC min ", adata1.X.min())
+	print("ATAC max ", adata1.X.max())
+	print("ATAC raw min ", adata1.raw.X.min())
+	print("ATAC raw max ", adata1.raw.X.max())
 
 	args.batch_size     = 64
 	args.epoch_per_test = 10
