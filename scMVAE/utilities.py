@@ -219,10 +219,11 @@ def calculate_log_library_size( Dataset ):
 	### Dataset is raw read counts, and should be cells * features
 	
 	Nsamples     =  np.shape(Dataset)[0]
-	library_sum  =  np.log( np.sum( Dataset, axis = 1 ) )
-	
+	library_sum  =  np.log( np.sum( Dataset, axis = 1 ) + 1e-10 )
+	library_sum  =  np.asarray(library_sum).flatten()
+
 	lib_mean     =  np.full( (Nsamples, 1), np.mean(library_sum) )
-	lib_var      =  np.full( (Nsamples, 1), np.var(library_sum) ) 
+	lib_var      =  np.full( (Nsamples, 1), max(np.var(library_sum), 1e-10) )
 	
 	return lib_mean, lib_var
 
