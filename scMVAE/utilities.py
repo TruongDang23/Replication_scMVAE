@@ -109,27 +109,51 @@ def read_dataset(File_RNA=None, File_ATAC=None, test_size_prop=0.15,
     # Feature selection RNA: HVG (seurat_v3) ────────────────────────────
     print(f"\n[RNA] Chọn top {top_n_rna} HVGs (seurat_v3) — shape ban đầu: {adata.shape}")
 
-    sc.pp.highly_variable_genes(
-        adata,
-        n_top_genes=top_n_rna,
-        flavor="seurat_v3",
-        subset=False
-    )
-    adata = adata[:, adata.var["highly_variable"].values].copy()
-
-    # Normalize sau khi giảm chiều
-    # sc.pp.normalize_total(adata, target_sum=1e4)
-    # sc.pp.log1p(adata)
-    print(f"[RNA] Sau HVG + normalize: {adata.shape}")
+    # ── 2. Bộ lọc Đặc trưng cho scRNA-seq (HVG) ──────────────────────────────
+    if 'highly_variable' in adata.var.columns:
+        print(f"[RNA] Tìm thấy cột highly_variable sẵn có.")
+        if adata.var['highly_variable'].sum() > top_n_rna and 'dispersions_norm' in adata.var.columns:
+            hvg_subset = adata.var[adata.var['highly_variable'] == True]
+            top_genes = hvg_subset.nlargest(top_n_rna, 'dispersions_norm').index
+            adata = adata[:, top_genes].copy()
+        else:
+            # Nếu không có cột dispersion hoặc số lượng vừa bằng, lấy các gene được đánh dấu True
+            # Nếu số lượng gene lớn hơn top_n_rna mà không có dispersion, lấy top_n_rna gene đầu tiên của tập True
+            true_genes = adata.var_names[adata.var['highly_variable'] == True]
+            adata = adata[:, true_genes[:top_n_rna]].copy()
+    else:
+        print(f"[Warning] Không thấy nhãn highly_variable trong RNA, tự động lấy {top_n_rna} gen đầu.")
+        adata = adata[:, :top_n_rna].copy()
+    
+    print(f"[RNA] Sau khi lọc lấy đặc trưng biến thiên: {adata.shape}")
 
     # Feature selection ATAC: top peaks by total count ──────────────────
     print(f"\n[ATAC] Chọn top {top_n_atac} peaks by total count — shape ban đầu: {adata1.shape}")
 
-    counts      = np.asarray(adata1.X.sum(axis=0)).ravel()
-    top_indices = np.argpartition(counts, -top_n_atac)[-top_n_atac:]
-    top_indices = np.sort(top_indices)               # giữ thứ tự gốc
-    adata1      = adata1[:, top_indices].copy()
-    print(f"[ATAC] Sau lọc peaks: {adata1.shape}")
+    # ── 3. Bộ lọc Đặc trưng cho scATAC-seq (Sửa đổi cho chuẩn Raw Count) ────
+    # Vì file ATAC.h5ad của bạn hiện tại có 2,016 features, chúng ta cần ép nó về đúng 2,000 (top_n_atac)
+    if 'highly_variable' in adata1.var.columns:
+        print(f"[ATAC] Tìm thấy cột highly_variable từ bước xử lý phương sai nhị phân.")
+        
+        # Sắp xếp và lọc lấy đúng top_n_atac dựa trên cột phương sai thủ công 'binary_variance' mà ta đã lưu
+        if 'binary_variance' in adata1.var.columns:
+            hvp_subset = adata1.var[adata1.var['highly_variable'] == True]
+            top_peaks = hvp_subset.nlargest(top_n_atac, 'binary_variance').index
+            adata1 = adata1[:, top_peaks].copy()
+        else:
+            # Cắt lấy đúng số lượng cột yêu cầu để tránh lệch chiều mạng Neural
+            true_peaks = adata1.var_names[adata1.var['highly_variable'] == True]
+            adata1 = adata1[:, true_peaks[:top_n_atac]].copy()
+    else:
+        # Nhánh dự phòng an toàn bằng phương sai nhị phân (chứ không dùng tổng sum nữa)
+        print(f"[Warning] Không tìm thấy cột highly_variable trong ATAC. Tính lại phương sai nhị phân...")
+        X_binary = (adata1.X > 0).astype(np.float32)
+        p = np.array(X_binary.mean(axis=0)).flatten()
+        variances = p * (1.0 - p)
+        top_indices = np.argpartition(variances, -top_n_atac)[-top_n_atac:]
+        adata1 = adata1[:, top_indices].copy()
+        
+    print(f"[ATAC] Sau khi lọc lấy đặc trưng biến thiên: {adata1.shape}")
 
     # ── 2. Lấy ground truth từ cột cell_type ─────────────────────────────────
     if 'cell_type' in adata.obs.columns:
@@ -167,9 +191,9 @@ def normalize( adata, filter_min_counts = True, size_factors = False,
 			   normalize_input = False, logtrans_input = True):
 	
 	# here, adata.x is raw readc count matrix with cells * Features 
-	if filter_min_counts:
-		sc.pp.filter_genes(adata, min_counts=1)
-		sc.pp.filter_cells(adata, min_counts=1)
+	# if filter_min_counts:
+	# 	sc.pp.filter_genes(adata, min_counts=1)
+	# 	sc.pp.filter_cells(adata, min_counts=1)
 
 	if size_factors or normalize_input or logtrans_input:
 		adata.raw = adata.copy()
