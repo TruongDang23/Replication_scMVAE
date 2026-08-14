@@ -1,0 +1,38 @@
+# =============================================================================
+#  scMVAE - replication environment (Google Colab / Python 3.10 - 3.12)
+#
+#  Cai dat:
+#      pip install -r requirements.txt
+#      -> SAU DO PHAI RESTART RUNTIME (numpy da duoc downgrade)
+#
+#  Khac biet chinh so voi used_package.txt goc: moi package deu co CHAN TREN.
+#  used_package.txt ghi "numpy>=1.19.2" khong chan tren -> pip keo numpy 2.5
+#  -> numba (dependency cua scanpy) tu choi:
+#     "ImportError: Numba needs NumPy 2.0 or less. Got NumPy 2.5"
+# =============================================================================
+
+# ── Core numeric ─────────────────────────────────────────────────────────────
+# numpy < 2.1 la rang buoc BAT BUOC, xuat phat truc tiep tu thong bao loi cua numba.
+numpy>=1.26,<2.1
+scipy>=1.11,<2.0
+pandas>=2.0,<3.0
+
+# ── Single-cell stack ────────────────────────────────────────────────────────
+# Chan <1.11 de tranh scanpy 1.13.0a1 (ban alpha) ma Colab dang cai san.
+scanpy>=1.10,<1.11
+anndata>=0.10,<0.12
+h5py>=3.8                  # doc/ghi file .h5ad
+scikit-misc>=0.3           # bat buoc cho sc.pp.highly_variable_genes(flavor='seurat_v3')
+
+# ── Machine learning ─────────────────────────────────────────────────────────
+scikit-learn>=1.3,<2.0     # KMeans, GaussianMixture, train_test_split, ARI/NMI
+
+# ── Deep learning ────────────────────────────────────────────────────────────
+# Colab da co san torch + CUDA. Dong nay chi de pip bo qua neu da du dieu kien.
+# KHONG dat chan tren de tranh pip go torch ban CUDA cua Colab roi cai lai ban CPU.
+torch>=2.0
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+tqdm>=4.55
+donfig
+numcodecs
