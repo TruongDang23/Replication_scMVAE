@@ -19,8 +19,9 @@ from sklearn.metrics import cohen_kappa_score
 from tqdm import trange
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-from scMVAE.utilities import read_dataset, normalize, calculate_log_library_size, parameter_setting, save_checkpoint, load_checkpoint, adjust_learning_rate
+from scMVAE.utilities import read_dataset, normalize, calculate_log_library_size, parameter_setting, save_checkpoint, load_checkpoint, adjust_learning_rate, set_seed, seed_worker, make_generator
 from scMVAE.MVAE_model import scMVAE_Concat, scMVAE_NN, scMVAE_POE
+import scMVAE.MVAE_model as MVAE_model_module
 
 
 def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var, lib_mean1, lib_var1, real_groups, 
@@ -34,7 +35,10 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
         torch.from_numpy(lib_mean1[train_index]),
         torch.from_numpy(lib_var1[train_index]),
         torch.from_numpy(adata1.raw[train_index].X.toarray()))
-    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True)
+    # generator + worker_init_fn: thu tu shuffle cua batch lap lai duoc giua cac lan chay
+    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True,
+                                         generator=make_generator(args.seed),
+                                         worker_init_fn=seed_worker)
 
     test = data_utils.TensorDataset(
         torch.from_numpy(adata.raw[test_index].X.toarray()),
@@ -63,6 +67,10 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
     reco_epoch_test = 0
     test_like_max   = 100000
     status          = ""
+
+    # checkpoint rieng cho tung seed -> tranh seed nay load nham checkpoint cua seed truoc
+    ckpt_path       = os.path.join('./saved_model', f'model_best_seed{args.seed}.pth.tar')
+    saved_any       = False
 
     args.epoch_per_test = 10
 
@@ -150,7 +158,7 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
                 if latent_z is not None:
                     # Dự đoán cụm từ latent z (dùng KMeans với n_clusters = số class)
                     n_clusters  = len(set(real_groups))
-                    km          = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                    km          = KMeans(n_clusters=n_clusters, random_state=args.seed, n_init=10)
                     pred_labels = km.fit_predict(latent_z)
 
                     ari = adjusted_rand_score(real_groups, pred_labels)
@@ -167,7 +175,8 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
                 if is_best:
                     test_like_max = test_loss.item()
                     epoch_count   = 0
-                    save_checkpoint(model)
+                    save_checkpoint(model, ckpt_path)
+                    saved_any     = True
 
                 # --- Print log mỗi eval epoch ---
                 best_tag = " ✓ best" if is_best else ""
@@ -208,9 +217,24 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
     print("=" * 75 + "\n")
 
     # ── Load lại model tốt nhất và xuất kết quả (giữ nguyên gốc) ──────────────
-    load_checkpoint('./saved_model/model_best.pth.tar', model, device)
+    if saved_any:
+        load_checkpoint(ckpt_path, model, device)
+    else:
+        print("  [Warning] Khong co checkpoint nao duoc luu (NaN ngay tu lan eval dau) "
+              "-> dung trong so hien tai.")
 
+    model.eval()
     latent_z, recon_x1, norm_x1, recon_x_2, norm_x2 = model.Denoise_batch(total_loader)
+
+    # ── Metric cuối cùng: clustering trên latent của best checkpoint ───────────
+    final_ari, final_nmi = 0.0, 0.0
+    if latent_z is not None:
+        n_clusters  = len(set(real_groups))
+        km          = KMeans(n_clusters=n_clusters, random_state=args.seed, n_init=10)
+        pred_labels = km.fit_predict(latent_z)
+        final_ari   = adjusted_rand_score(real_groups, pred_labels)
+        final_nmi   = normalized_mutual_info_score(real_groups, pred_labels, average_method='arithmetic')
+        print(f"  [Best checkpoint] ARI: {final_ari:.4f}  |  NMI: {final_nmi:.4f}\n")
 
     if latent_z is not None:
         pd.DataFrame(latent_z, index=adata.obs_names).to_csv(
@@ -221,11 +245,26 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
     if norm_x2 is not None:
         pd.DataFrame(norm_x2, columns=adata1.var_names, index=adata1.obs_names).to_csv(
             os.path.join(args.outdir, str(file_fla) + '_scATAC_norm_ZINB_final.csv'))
-        
+
+    return {
+        'seed'      : args.seed,
+        'ari'       : final_ari,                # metric cua best checkpoint  <- dung de bao cao
+        'nmi'       : final_nmi,
+        'ari_best'  : max(ari_history) if ari_history else 0.0,
+        'nmi_best'  : max(nmi_history) if nmi_history else 0.0,
+        'ari_last'  : ari_history[-1] if ari_history else 0.0,
+        'nmi_last'  : nmi_history[-1] if nmi_history else 0.0,
+        'stop_epoch': reco_epoch_test,
+        'status'    : status,
+        'test_loss' : test_like_max,
+    }
+
 def train_with_argas( args ):
 
 	args.workdir  =  '/content/Replication_scMVAE/scMVAE/dataset/'
 	args.outdir   =  '/content/Replication_scMVAE/scMVAE/output/'
+
+	os.makedirs( args.outdir, exist_ok = True )
 
 	# adata, adata1, adata2, train_index, test_index,_ = read_dataset( File1 = os.path.join( args.workdir, args.File1 ),
 	# 															     File2 = os.path.join( args.workdir, args.File2 ),  
@@ -322,15 +361,61 @@ def train_with_argas( args ):
 	model.to(device)
 	infer_data = adata1
 
-	train( args, adata, infer_data, model, train_index, test_index, lib_mean, lib_var, 
-		   lib_mean1, lib_var1, adata.obs['Group'], 0.0001, 1, "ZINB", "ZINB", device, 
-		   scale_factor = 4 )
+	# file_fla = seed  ->  moi seed xuat CSV rieng, khong ghi de len nhau
+	return train( args, adata, infer_data, model, train_index, test_index, lib_mean, lib_var,
+			      lib_mean1, lib_var1, adata.obs['Group'], 0.0001, args.seed, "ZINB", "ZINB", device,
+			      scale_factor = 4 )
+
+
+def run_multi_seed( args, seeds ):
+	### chay lai toan bo pipeline cho tung seed roi tong hop mean +/- std
+
+	results = []
+
+	for i, seed in enumerate(seeds):
+		print("\n" + "#" * 75)
+		print(f"#  RUN seed = {seed}   ({i + 1}/{len(seeds)})")
+		print("#" * 75)
+
+		args.seed = seed
+		set_seed( seed )                      # phai goi TRUOC read_dataset / khoi tao model
+
+		# GMM init cung phai doi theo seed, neu khong se bo sot mot nguon bien thien
+		MVAE_model_module.GMM_SEED = seed
+
+		results.append( train_with_argas(args) )
+
+	# ── Bang ket qua tung seed ────────────────────────────────────────────────
+	print("\n" + "=" * 75)
+	print("  KET QUA TONG HOP")
+	print("=" * 75)
+	print(f"{'Seed':>6} | {'ARI':>8} | {'NMI':>8} | {'Epoch':>6} | Status")
+	print("-" * 75)
+	for r in results:
+		print(f"{r['seed']:>6} | {r['ari']:>8.4f} | {r['nmi']:>8.4f} | {r['stop_epoch']:>6} | {r['status']}")
+
+	ari = np.array([r['ari'] for r in results])
+	nmi = np.array([r['nmi'] for r in results])
+
+	print("-" * 75)
+	print(f"  ARI : {ari.mean():.4f} +/- {ari.std(ddof=1):.4f}   (min {ari.min():.4f} / max {ari.max():.4f})")
+	print(f"  NMI : {nmi.mean():.4f} +/- {nmi.std(ddof=1):.4f}   (min {nmi.min():.4f} / max {nmi.max():.4f})")
+	print("=" * 75 + "\n")
+
+	df = pd.DataFrame(results)
+	out_csv = os.path.join(args.outdir, 'multi_seed_results.csv')
+	df.to_csv(out_csv, index=False)
+	print(f"  Da luu chi tiet -> {out_csv}")
+
+	return df
 
 
 if __name__ == "__main__":
 
 	parser = parameter_setting()
+	parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2, 3, 4],
+						help='Danh sach seed de chay lap lai (vd: --seeds 0 1 2 3 4)')
 	args   = parser.parse_args()
 
-	train_with_argas(args)
+	run_multi_seed( args, args.seeds )
 	

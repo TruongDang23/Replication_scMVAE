@@ -13,6 +13,7 @@ import pandas as pd
 import scanpy as sc
 import os
 import time
+import random
 import argparse
 import torch
 from torch.autograd import Variable
@@ -24,6 +25,44 @@ from sklearn import metrics
 from scipy.io import mmread
 
 from sklearn.model_selection import train_test_split
+
+GMM_SEED = 200   # seed dùng cho GaussianMixture trong init_gmm_params
+
+
+def set_seed( seed = 200, deterministic = True ):
+	### co dinh toan bo RNG (python / numpy / torch / cudnn)
+	### phai goi TRUOC khi khoi tao model va DataLoader
+
+	os.environ['PYTHONHASHSEED'] = str(seed)
+
+	random.seed( seed )
+	np.random.seed( seed )          # anh huong ca sklearn (KMeans / GaussianMixture)
+	torch.manual_seed( seed )
+	torch.cuda.manual_seed_all( seed )
+
+	if deterministic:
+		torch.backends.cudnn.deterministic = True
+		torch.backends.cudnn.benchmark     = False
+
+	return seed
+
+
+def seed_worker( worker_id ):
+	### giu RNG on dinh khi DataLoader dung num_workers > 0
+
+	worker_seed = torch.initial_seed() % 2**32
+	np.random.seed( worker_seed )
+	random.seed( worker_seed )
+
+
+def make_generator( seed = 200 ):
+	### generator cho DataLoader(shuffle=True) de thu tu batch lap lai duoc
+
+	g = torch.Generator()
+	g.manual_seed( seed )
+
+	return g
+
 
 def parameter_setting():
 	
@@ -266,8 +305,9 @@ def getFinalResult( Result, Result1, Mode = 0 ):
 	return latent_temp, norm_x1_temp, recon_x1_temp, recon_x2_temp
 
 
-def save_checkpoint( model, fileName = 'model_best.pth.tar'):
+def save_checkpoint( model, fileName = './saved_model/model_best.pth.tar'):
 
+	os.makedirs( os.path.dirname(fileName) or '.', exist_ok = True )
 	torch.save( model.state_dict(), fileName )
 
 

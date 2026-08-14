@@ -21,6 +21,9 @@ from scMVAE.loss_function import log_zinb_positive, binary_cross_entropy, mse_lo
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+### seed cho GaussianMixture (k-means init cua sklearn) trong init_gmm_params
+GMM_SEED = 200
+
 
 class scMVAE_Concat(nn.Module):
 	def __init__( self, layer_e, hidden1, Zdim, layer_l, hidden3, layer_d, 
@@ -184,7 +187,7 @@ class scMVAE_Concat(nn.Module):
 
 	def init_gmm_params(self, Dataloader, device ):
 
-		gmm      = GaussianMixture(n_components=self.n_centroids, covariance_type='diag')
+		gmm      = GaussianMixture(n_components=self.n_centroids, covariance_type='diag', random_state=GMM_SEED)
 		latent_z = self.out_Batch(Dataloader, device, out='Z' )
 		gmm.fit(latent_z)
 
@@ -438,8 +441,8 @@ class scMVAE_NN(nn.Module):
 
 	def init_gmm_params(self, Dataloader, device):
 
-		gmm = GaussianMixture(n_components=self.n_centroids, covariance_type='diag')
-	   
+		gmm = GaussianMixture(n_components=self.n_centroids, covariance_type='diag', random_state=GMM_SEED)
+
 		latent_z  =  self.out_Batch(Dataloader, device, out='Z' )
 		gmm.fit(latent_z)
 
@@ -748,8 +751,8 @@ class scMVAE_POE(nn.Module):
 
 	def init_gmm_params(self, Dataloader):
 		
-		gmm = GaussianMixture(n_components=self.n_centroids, covariance_type='diag')
-		
+		gmm = GaussianMixture(n_components=self.n_centroids, covariance_type='diag', random_state=GMM_SEED)
+
 		latent_z  =  self.out_Batch(Dataloader, out='Z' )
 		gmm.fit(latent_z)
 
