@@ -22,6 +22,39 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from scMVAE.utilities import read_dataset, normalize, calculate_log_library_size, parameter_setting, save_checkpoint, load_checkpoint, adjust_learning_rate, set_seed, seed_worker, make_generator
 from scMVAE.MVAE_model import scMVAE_Concat, scMVAE_NN, scMVAE_POE
 import scMVAE.MVAE_model as MVAE_model_module
+from scMVAE.export import save_embedding
+
+
+def export_npz(args, adata, latent_z, pred_labels, stop_epoch):
+    ### ghi {method}_{dataset}.npz theo contract trong EXPORT_NPZ_GUIDE.md de ve UMAP
+    npz_dir = getattr(args, 'npz_dir', None) or args.outdir
+    os.makedirs(npz_dir, exist_ok=True)
+
+    # chay nhieu seed -> moi seed 1 file rieng, tranh ghi de
+    seeds    = getattr(args, 'seeds', [args.seed])
+    suffix   = f"_seed{args.seed}" if len(seeds) > 1 else ""
+    out_path = os.path.join(npz_dir, f"{args.method_name}_{args.dataset_name}{suffix}.npz")
+
+    # total_loader shuffle=False -> hang i cua latent_z / pred_labels ung voi adata.obs_names[i]
+    y_true = adata.obs['Group'].astype(str).to_numpy()
+    y_pred = np.asarray(pred_labels).astype(int)
+
+    save_embedding(
+        out_path   = out_path,
+        emb        = latent_z,
+        cell_ids   = adata.obs_names.to_numpy().astype(str),
+        y_true     = y_true,
+        y_pred     = y_pred,
+        method     = args.method_name,
+        ari        = adjusted_rand_score(y_true, y_pred),
+        nmi        = normalized_mutual_info_score(y_true, y_pred, average_method='arithmetic'),
+        emb_source = "latent_z (PoE joint posterior mean, model.eval)",
+        checkpoint = "best_test_loss",
+        seed       = args.seed,
+        stop_epoch = stop_epoch,
+    )
+
+    return out_path
 
 
 def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var, lib_mean1, lib_var1, real_groups, 
@@ -228,6 +261,7 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
 
     # ── Metric cuối cùng: clustering trên latent của best checkpoint ───────────
     final_ari, final_nmi = 0.0, 0.0
+    npz_path             = None
     if latent_z is not None:
         n_clusters  = len(set(real_groups))
         km          = KMeans(n_clusters=n_clusters, random_state=args.seed, n_init=10)
@@ -235,6 +269,10 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
         final_ari   = adjusted_rand_score(real_groups, pred_labels)
         final_nmi   = normalized_mutual_info_score(real_groups, pred_labels, average_method='arithmetic')
         print(f"  [Best checkpoint] ARI: {final_ari:.4f}  |  NMI: {final_nmi:.4f}\n")
+
+        # ── Xuat .npz de ve UMAP: dung dung latent_z + pred_labels vua dung de bao cao ──
+        if getattr(args, 'export_npz', False):
+            npz_path = export_npz(args, adata, latent_z, pred_labels, reco_epoch_test)
 
     if latent_z is not None:
         pd.DataFrame(latent_z, index=adata.obs_names).to_csv(
@@ -257,6 +295,7 @@ def train(args, adata, adata1, model, train_index, test_index, lib_mean, lib_var
         'stop_epoch': reco_epoch_test,
         'status'    : status,
         'test_loss' : test_like_max,
+        'npz_path'  : npz_path,
     }
 
 def train_with_argas( args ):
@@ -415,6 +454,15 @@ if __name__ == "__main__":
 	parser = parameter_setting()
 	parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2, 3, 4],
 						help='Danh sach seed de chay lap lai (vd: --seeds 0 1 2 3 4)')
+	# ── Args xuat .npz (khong anh huong train / gom cum) ──────────────────────
+	parser.add_argument('--no_export_npz', dest='export_npz', action='store_false',
+						help='Tat xuat file .npz de ve UMAP (mac dinh: bat)')
+	parser.add_argument('--npz_dir', type=str, default=None,
+						help='Thu muc luu .npz (mac dinh: args.outdir)')
+	parser.add_argument('--method_name', type=str, default='scMVAE',
+						help='Ten method hien thi tren hinh UMAP va trong ten file .npz')
+	parser.add_argument('--dataset_name', type=str, default='PBMC',
+						help='Ten dataset trong ten file .npz')
 	args   = parser.parse_args()
 
 	run_multi_seed( args, args.seeds )
